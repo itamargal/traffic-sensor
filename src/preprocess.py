@@ -100,26 +100,12 @@ def aggregate_data(lines):
         )
         print("%s: %s" % (device, trips[device]))
 
-
-def main():
-    # Parse command-line arguments
-    parser = argparse.ArgumentParser(usage=__doc__)
-    parser.add_argument('input', type=open, help='input data file')
-    parser.add_argument('output', type=argparse.FileType('w'), help='debug output data file')
-    parser.add_argument('--user', help='socrata user')
-    parser.add_argument('--password', help='socrata password')
-    args = parser.parse_args()
-
-    creds = {'user': args.user, 'password': args.password}
-    print(creds)
-
-    # TODO Add multifile support
-
+def read_file(file):
     # Get the location name from the filename eg /x/y/z/benwhite.log -> benwhite
-    location = os.path.basename(args.input.name)
-    location = location[:location.find('.')]
+    filename = os.path.basename(file.name)
+    location = filename[:filename.find('.')]
 
-    indata = args.input.readlines()
+    indata = file.readlines()
     outdata = []
 
     for line in indata:
@@ -129,11 +115,32 @@ def main():
         # TODO lookup manufacturer from mac
         outdata.append({'location': location, 'mac': anonymize(mac), 'timestamp': timestamp, 'epoch':epoch})
 
-    raw_data = generate_raw_dataset(outdata, args.output)
+    return outdata
+
+def main():
+    # Parse command-line arguments
+    parser = argparse.ArgumentParser(usage=__doc__)
+    parser.add_argument('input1', type=open, help='input data file 1')
+    parser.add_argument('input2', type=open, help='input data file 2')
+    parser.add_argument('output', type=argparse.FileType('w'), help='debug output data file')
+    parser.add_argument('--user', help='socrata user')
+    parser.add_argument('--password', help='socrata password')
+    args = parser.parse_args()
+
+    creds = {'user': args.user, 'password': args.password}
+    print(creds)
+
+    # TODO Add real multifile support
+
+    indata1 = read_file(args.input1)
+    indata2 = read_file(args.input2)
+    alldata = indata1 + indata2
+
+    raw_data = generate_raw_dataset(alldata, args.output)
     result = upsert_data(creds, raw_data, 'eitg-njyb')
     if result : print(result)
 
-    aggregate_data(outdata)
+    aggregate_data(alldata)
 
     # TODO Add other processing here
 
