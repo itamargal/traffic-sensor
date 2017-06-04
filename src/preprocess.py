@@ -8,7 +8,6 @@ import requests
 random.seed()
 known_macs = {}
 
-
 def anonymize(mac):
     if mac in known_macs:
         anon = known_macs[mac]
@@ -18,7 +17,7 @@ def anonymize(mac):
     return anon
 
 
-def generate_raw_dataset(indata, outfile):
+def generate_raw_dataset(indata):
     outdata = []
 
     for data in indata:
@@ -29,9 +28,6 @@ def generate_raw_dataset(indata, outfile):
         location = data['location']
         id = '{}_{}_{}'.format(mac, location, idtimestr)
         outdata.append({'id': id, 'device_address': mac, 'reader_name': location, 'read_time': timestr})
-
-    # TODO turn off debug data dump
-    json.dump(outdata, outfile)
 
     return outdata
 
@@ -117,12 +113,27 @@ def read_file(file):
 
     return outdata
 
+def write_debug_json(directory, filename, data):
+    if directory != None and os.path.exists(directory) and os.path.isdir(directory):
+        with open(os.path.join(directory, filename), 'w') as outfile:
+            json.dump(data, outfile)
+
+def read_all_files(directory):
+    alldata = []
+    for filename in os.listdir(directory):
+        if filename.endswith(".log"):
+            with open(os.path.join(directory, filename), 'r') as file:
+                alldata = alldata + read_file(file)
+            continue
+        else:
+            continue
+    return alldata
+
 def main():
     # Parse command-line arguments
     parser = argparse.ArgumentParser(usage=__doc__)
-    parser.add_argument('input1', type=open, help='input data file 1')
-    parser.add_argument('input2', type=open, help='input data file 2')
-    parser.add_argument('output', type=argparse.FileType('w'), help='debug output data file')
+    parser.add_argument('directory', help='input data directory')
+    parser.add_argument('--debug_directory', help='debug output data directory')
     parser.add_argument('--user', help='socrata user')
     parser.add_argument('--password', help='socrata password')
     args = parser.parse_args()
@@ -130,20 +141,19 @@ def main():
     creds = {'user': args.user, 'password': args.password}
     print(creds)
 
-    # TODO Add real multifile support
+    if os.path.exists(args.directory) and os.path.isdir(args.directory) :
+        alldata = read_all_files(args.directory)
 
-    indata1 = read_file(args.input1)
-    indata2 = read_file(args.input2)
-    alldata = indata1 + indata2
+        raw_data = generate_raw_dataset(alldata)
+        write_debug_json(args.debug_directory, 'raw.json', raw_data)
+        result = upsert_data(creds, raw_data, 'eitg-njyb')
+        if result : print(result)
 
-    raw_data = generate_raw_dataset(alldata, args.output)
-    result = upsert_data(creds, raw_data, 'eitg-njyb')
-    if result : print(result)
+        aggregate_data(alldata)
 
-    aggregate_data(alldata)
-
-    # TODO Add other processing here
-
+        # TODO Add other processing here
+    else:
+        print("{} is not a directory or does not exist".format(args.directory))
 
 if __name__ == "__main__":
     main()
