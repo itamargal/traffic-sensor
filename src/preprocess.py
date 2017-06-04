@@ -7,6 +7,8 @@ import requests
 
 random.seed()
 known_macs = {}
+known_vendors = {'cached': 0}  # keep track of caching metrics
+
 
 def anonymize(mac):
     if mac in known_macs:
@@ -26,17 +28,17 @@ def generate_raw_dataset(indata):
         idtimestr = time.strftime('%Y%m%dT%H%M%S%z', timestamp)
         timestr = time.strftime('%Y-%m-%dT%H:%M:%S', timestamp)
         location = data['location']
-        id = '{}_{}_{}'.format(mac, location, idtimestr)
-        outdata.append({'id': id, 'device_address': mac, 'reader_name': location, 'read_time': timestr})
+        ident = '{}_{}_{}'.format(mac, location, idtimestr)
+        outdata.append({'id': ident, 'device_address': mac, 'reader_name': location, 'read_time': timestr})
 
     return outdata
 
 
-# TODO Taken from transportation-data-publishing/socrata_helpers.py - import for reuse?
+# TODO Modified from transportation-data-publishing/socrata_helpers.py - import for reuse?
 def upsert_data(creds, payload, resource):
     print('upsert open data ' + resource)
 
-    if creds['user'] != None and creds['password'] != None:
+    if creds['user'] is not None and creds['password'] is not None:
         url = 'https://data.austintexas.gov/resource/{}.json'.format(resource)
 
         try:
@@ -50,6 +52,7 @@ def upsert_data(creds, payload, resource):
         return res.json()
     else:
         print('Skipping upload due to incomplete credentials')
+
 
 def aggregate_data(lines):
     # data1 = ['benwhite', 'c8:b3:a5:', 1457093877]
@@ -91,12 +94,35 @@ def aggregate_data(lines):
         trips[device] = (
             device,
             start_time,
-            'N' if start_loc == 'benwhite' else 'S',
+            'N' if start_loc == 'benwhite' else 'S',  # TODO replace with something more robust
             end_time - start_time,
         )
         print("%s: %s" % (device, trips[device]))
 
-def read_file(file):
+
+def get_mac_manufacturer(mac):
+    # TODO This could be a lot faster with a local lookup
+    # Just need the first 3 segments (xx:xx:xx) for vendor lookup
+    vendor_mac = mac[:8]
+    if vendor_mac in known_vendors:
+        vendor = known_vendors[vendor_mac]
+        cached_lookups = known_vendors['cached']
+        cached_lookups += 1
+        known_vendors['cached'] = cached_lookups
+    else:
+        url = 'http://macvendors.co/api/vendorname/{}'.format(mac[:8])
+        try:
+            res = requests.get(url)
+            vendor = res.text
+        except requests.exceptions.HTTPError as e:
+            print('Error in vendor lookup: {}'.format(e.strerror))
+            vendor = 'Not available'
+        known_vendors[vendor_mac] = vendor
+
+    return vendor
+
+
+def read_file(file, lookup_manufacturer):
     # Get the location name from the filename eg /x/y/z/benwhite.log -> benwhite
     filename = os.path.basename(file.name)
     location = filename[:filename.find('.')]
@@ -108,26 +134,34 @@ def read_file(file):
         mac, epoch = line.split()
         epoch = float(epoch)
         timestamp = time.localtime(epoch)
-        # TODO lookup manufacturer from mac
-        outdata.append({'location': location, 'mac': anonymize(mac), 'timestamp': timestamp, 'epoch':epoch})
+
+        if lookup_manufacturer:
+            manufacturer = get_mac_manufacturer(mac)
+        else:
+            manufacturer = 'Not available'
+        outdata.append({'location': location, 'mac': anonymize(mac), 'timestamp': timestamp, 'epoch': epoch,
+                        'manufacturer': manufacturer})
 
     return outdata
 
+
 def write_debug_json(directory, filename, data):
-    if directory != None and os.path.exists(directory) and os.path.isdir(directory):
+    if directory is not None and os.path.exists(directory) and os.path.isdir(directory):
         with open(os.path.join(directory, filename), 'w') as outfile:
             json.dump(data, outfile)
 
-def read_all_files(directory):
+
+def read_all_files(directory, lookup_manufacturer):
     alldata = []
     for filename in os.listdir(directory):
         if filename.endswith(".log"):
             with open(os.path.join(directory, filename), 'r') as file:
-                alldata = alldata + read_file(file)
+                alldata = alldata + read_file(file, lookup_manufacturer)
             continue
         else:
             continue
     return alldata
+
 
 def main():
     # Parse command-line arguments
@@ -136,18 +170,22 @@ def main():
     parser.add_argument('--debug_directory', help='debug output data directory')
     parser.add_argument('--user', help='socrata user')
     parser.add_argument('--password', help='socrata password')
+    parser.add_argument('--manufacturer', action='store_true', help='lookup manufacturers (warning, this is SLOW)')
     args = parser.parse_args()
 
     creds = {'user': args.user, 'password': args.password}
-    print(creds)
 
-    if os.path.exists(args.directory) and os.path.isdir(args.directory) :
-        alldata = read_all_files(args.directory)
+    if os.path.exists(args.directory) and os.path.isdir(args.directory):
+        alldata = read_all_files(args.directory, args.manufacturer)
 
         raw_data = generate_raw_dataset(alldata)
         write_debug_json(args.debug_directory, 'raw.json', raw_data)
         result = upsert_data(creds, raw_data, 'eitg-njyb')
-        if result : print(result)
+        if result:
+            print(result)
+
+        if args.manufacturer:
+            print('unique vendors: {} cached: {}'.format(len(known_vendors)-1, known_vendors['cached']))
 
         aggregate_data(alldata)
 
