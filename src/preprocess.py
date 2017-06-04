@@ -1,6 +1,7 @@
 import argparse
 import time
 import json
+import os
 import random
 import requests
 
@@ -21,9 +22,11 @@ def generate_raw_dataset(indata, outfile):
     for data in indata:
         mac = data['mac']
         timestamp = data['timestamp']
+        idtimestr = time.strftime('%Y%m%dT%H%M%S%z',timestamp)
+        timestr = time.strftime('%Y-%m-%dT%H:%M:%S',timestamp)
         location = data['location']
-        id = mac+'_'+location+'_'+time.strftime('%Y-%m-%dT%H:%M:%S%z',timestamp)
-        outdata.append([id,location,mac,timestamp])
+        id = '{}_{}_{}'.format(mac, location, idtimestr)
+        outdata.append({'id':id,'device_address':mac,'reader_name':location,'read_time':timestr})
 
     # TODO turn off debug data dump
     json.dump(outdata, outfile)
@@ -61,10 +64,11 @@ def main():
     creds = {'user':args.user, 'password':args.password}
     print(creds)
 
-    location=args.input.name
-    print(location)
-    # TODO parse out just the location eg oltorf.log
-    location='oltorf'
+    # TODO Add multifile support
+
+    # Get the location name from the filename eg /x/y/z/benwhite.log -> benwhite
+    location=os.path.basename(args.input.name)
+    location=location[:location.find('.')]
 
     indata = args.input.readlines()
     outdata = []
@@ -76,7 +80,8 @@ def main():
         outdata.append({'location': location, 'mac': anonymize(mac), 'timestamp': timestamp})
 
     raw_data = generate_raw_dataset(outdata, args.output)
-    upsert_data(creds, raw_data, 'eitg-njyb')
+    result = upsert_data(creds, raw_data, 'eitg-njyb')
+    print(result)
 
     # TODO Add other processing here
 
